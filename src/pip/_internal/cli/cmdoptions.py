@@ -118,7 +118,7 @@ def check_build_constraints(options: Values) -> None:
         # Eagerly check build constraints file contents
         # is valid so that we don't fail in when trying
         # to check constraints in isolated build process
-        with PipSession() as session:
+        with PipSession(schemes=getattr(options, "schemes", {})) as session:
             for constraint_file in options.build_constraints:
                 get_file_content(constraint_file, session)
 
@@ -894,6 +894,17 @@ def _handle_config_settings(
         dest[key] = val
 
 
+def _handle_scheme(option: Option, opt_str: str, value: str, parser: OptionParser) -> None:
+    key, sep, val = value.partition("=")
+    if sep != "=":
+        parser.error(f"Arguments to {opt_str} must be of the form scheme=module.name:AdapterClass")
+    dest = getattr(parser.values, option.dest)
+    if dest is None:
+        dest = {}
+        setattr(parser.values, option.dest, dest)
+    dest[key] = val
+
+
 config_settings: Callable[..., Option] = partial(
     Option,
     "-C",
@@ -907,6 +918,19 @@ config_settings: Callable[..., Option] = partial(
     "Settings take the form KEY=VALUE. Use multiple --config-settings options "
     "to pass multiple keys to the backend.",
 )
+
+
+scheme: Callable[..., Option] = partial(
+    Option,
+    "--scheme",
+    dest="schemes",
+    type="str",
+    action="callback",
+    callback=_handle_scheme,
+    metavar="scheme=spec",
+    help="Custom scheme handlers in the form of scheme=module.name:AdapterClass.",
+)
+
 
 no_clean: Callable[..., Option] = partial(
     Option,
@@ -1118,5 +1142,6 @@ index_group: dict[str, Any] = {
         extra_index_url,
         no_index,
         find_links,
+        scheme,
     ],
 }

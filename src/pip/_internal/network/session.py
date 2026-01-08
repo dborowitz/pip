@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import email.utils
 import functools
+import importlib
 import io
 import ipaddress
 import json
@@ -250,7 +251,6 @@ class LocalFSAdapter(BaseAdapter):
     def close(self) -> None:
         pass
 
-
 class _SSLContextAdapterMixin:
     """Mixin to add the ``ssl_context`` constructor argument to HTTP adapters.
 
@@ -334,6 +334,7 @@ class PipSession(requests.Session):
         trusted_hosts: Sequence[str] = (),
         index_urls: list[str] | None = None,
         ssl_context: SSLContext | None = None,
+        schemes: dict[str, str] | None = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -341,6 +342,8 @@ class PipSession(requests.Session):
             HTTPS.
         """
         super().__init__(*args, **kwargs)
+
+        self._custom_secure_schemes: list[SecureOrigin] = []
 
         # Namespace the attribute with "pip_" just in case to prevent
         # possible conflicts with the base class.
@@ -405,6 +408,19 @@ class PipSession(requests.Session):
         # Enable file:// urls
         self.mount("file://", LocalFSAdapter())
 
+        if schemes:
+            for scheme, implementation in schemes.items():
+                try:
+                    # TODO: push parsing (and maybe importing?) into cmdoptions
+                    module_name, class_name = implementation.split(":", 1)
+                    module = importlib.import_module(module_name)
+                    adapter_class = getattr(module, class_name)
+                    adapter = adapter_class()
+                    self.mount(f"{scheme}://", adapter)
+                    self._custom_secure_schemes.append((scheme, "*", "*"))
+                except Exception as e:
+                    logger.warning(f"Failed to load scheme %s: %s", scheme, e)
+
         for host in trusted_hosts:
             self.add_trusted_host(host, suppress_logging=True)
 
@@ -450,6 +466,7 @@ class PipSession(requests.Session):
 
     def iter_secure_origins(self) -> Generator[SecureOrigin, None, None]:
         yield from SECURE_ORIGINS
+        yield from self._custom_secure_schemes
         for host, port in self.pip_trusted_origins:
             yield ("*", host, "*" if port is None else port)
 

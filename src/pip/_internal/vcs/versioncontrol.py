@@ -47,9 +47,8 @@ def is_url(name: str) -> bool:
     Return true if the name looks like a URL.
     """
     scheme = urllib.parse.urlsplit(name).scheme
-    if not scheme:
-        return False
-    return scheme in ["http", "https", "file", "ftp"] + vcs.all_schemes
+    # TODO: check against actual registered VCS and other custom schemes
+    return bool(scheme)
 
 
 def make_vcs_requirement_url(
