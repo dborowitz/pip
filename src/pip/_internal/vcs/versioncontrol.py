@@ -49,7 +49,7 @@ def is_url(name: str) -> bool:
     scheme = urllib.parse.urlsplit(name).scheme
     if not scheme:
         return False
-    return scheme in ["http", "https", "file", "ftp"] + vcs.all_schemes
+    return scheme in ["http", "https", "file", "ftp", "gs"] + vcs.all_schemes
 
 
 def make_vcs_requirement_url(

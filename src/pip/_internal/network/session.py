@@ -251,6 +251,73 @@ class LocalFSAdapter(BaseAdapter):
         pass
 
 
+class GCSAdapter(BaseAdapter):
+    def send(
+        self,
+        request: PreparedRequest,
+        stream: bool = False,
+        timeout: Optional[Union[float, tuple[float, float]]] = None,
+        verify: Union[bool, str] = True,
+        cert: Optional[Union[str, tuple[str, str]]] = None,
+        proxies: Optional[Mapping[str, str]] = None,
+    ) -> Response:
+        try:
+            from google.cloud import storage
+        except ImportError:
+            raise RuntimeError("google-cloud-storage is required for gs:// URLs")
+
+        parsed = urllib.parse.urlparse(request.url)
+        bucket_name = parsed.netloc
+        blob_name = parsed.path.lstrip("/")
+
+        resp = Response()
+        resp.url = request.url
+
+        try:
+            client = storage.Client()
+            bucket = client.bucket(bucket_name)
+            blob = bucket.get_blob(blob_name)
+
+            if blob is None:
+                resp.status_code = 404
+                resp.reason = "Not Found"
+                err = f"gs://{bucket_name}/{blob_name} not found"
+                resp.raw = io.BytesIO(err.encode("utf8"))
+            else:
+                resp.status_code = 200
+                resp.reason = "OK"
+                headers = {
+                    "Content-Type": blob.content_type or "application/octet-stream",
+                }
+                if blob.size is not None:
+                    headers["Content-Length"] = str(blob.size)
+                if blob.updated:
+                    headers["Last-Modified"] = email.utils.formatdate(
+                        blob.updated.timestamp(), usegmt=True
+                    )
+                resp.headers = CaseInsensitiveDict(headers)
+
+                if hasattr(blob, "open"):
+                    resp.raw = blob.open("rb")
+                else:
+                    # TODO: stream large blobs
+                    resp.raw = io.BytesIO(blob.download_as_bytes())
+
+                resp.close = resp.raw.close
+
+        except Exception as exc:
+            # TODO: return 401/403/etc if necessary
+            resp.status_code = 500
+            resp.reason = "Internal Server Error"
+            resp.raw = io.BytesIO(f"GCS Error: {exc}".encode("utf8"))
+            resp.close = resp.raw.close
+
+        return resp
+
+    def close(self) -> None:
+        pass
+
+
 class _SSLContextAdapterMixin:
     """Mixin to add the ``ssl_context`` constructor argument to HTTP adapters.
 
@@ -404,6 +471,20 @@ class PipSession(requests.Session):
 
         # Enable file:// urls
         self.mount("file://", LocalFSAdapter())
+
+        if schemes:
+            import importlib
+
+            for scheme, implementation in schemes.items():
+                try:
+                    module_name, class_name = implementation.split(":", 1)
+                    module = importlib.import_module(module_name)
+                    adapter_class = getattr(module, class_name)
+                    adapter = adapter_class()
+                    self.mount(f"{scheme}://", adapter)
+                    self._custom_secure_schemes.append((scheme, "*", "*"))
+                except Exception as e:
+                    logger.warning(f"Failed to load scheme %s: %s", scheme, e)
 
         for host in trusted_hosts:
             self.add_trusted_host(host, suppress_logging=True)
